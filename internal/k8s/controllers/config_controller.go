@@ -25,6 +25,7 @@ import (
 	metallbv1beta1 "go.universe.tf/metallb/api/v1beta1"
 	metallbv1beta2 "go.universe.tf/metallb/api/v1beta2"
 	"go.universe.tf/metallb/internal/config"
+	"go.universe.tf/metallb/internal/conversion"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -40,14 +41,15 @@ const bgpExtrasConfigName = "bgpextras"
 
 type ConfigReconciler struct {
 	client.Client
-	Logger         log.Logger
-	Scheme         *runtime.Scheme
-	Namespace      string
-	Handler        func(log.Logger, *config.Config) SyncState
-	ValidateConfig config.Validate
-	ForceReload    func()
-	BGPType        string
-	currentConfig  *config.Config
+	Logger              log.Logger
+	Scheme              *runtime.Scheme
+	Namespace           string
+	Handler             func(log.Logger, *config.Config) SyncState
+	ValidateConfig      config.Validate
+	ForceReload         func()
+	BGPType             string
+	currentConfig       *config.Config
+	LegacyConfigMapName string
 }
 
 func (r *ConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -125,6 +127,23 @@ var requestHandler = func(r *ConfigReconciler, ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	var legacyConfig corev1.ConfigMap
+	key = client.ObjectKey{Name: r.LegacyConfigMapName, Namespace: r.Namespace}
+	if err := r.Get(ctx, key, &legacyConfig); err != nil && !apierrors.IsNotFound(err) {
+		level.Error(r.Logger).Log("controller", "ConfigReconciler", "message", "failed to get the frr configmap", "error", err)
+		return ctrl.Result{}, err
+	}
+
+	legacyCF, err := conversion.DecodeLegacyCM(legacyConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	legacyResources, err := conversion.ResourcesFor(legacyCF)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	resources := config.ClusterResources{
 		Pools:              ipAddressPools.Items,
 		Peers:              bgpPeers.Items,
@@ -138,6 +157,8 @@ var requestHandler = func(r *ConfigReconciler, ctx context.Context, req ctrl.Req
 		Namespaces:         namespaces.Items,
 		BGPExtras:          extrasMap,
 	}
+
+	resources = conversion.AddLegacyResources(&resources, &legacyResources)
 
 	level.Debug(r.Logger).Log("controller", "ConfigReconciler", "metallb CRs and Secrets", dumpClusterResources(&resources))
 

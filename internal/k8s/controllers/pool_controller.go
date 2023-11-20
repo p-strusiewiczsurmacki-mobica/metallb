@@ -24,7 +24,9 @@ import (
 	"github.com/go-kit/log/level"
 	metallbv1beta1 "go.universe.tf/metallb/api/v1beta1"
 	"go.universe.tf/metallb/internal/config"
+	"go.universe.tf/metallb/internal/conversion"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,13 +37,14 @@ import (
 
 type PoolReconciler struct {
 	client.Client
-	Logger         log.Logger
-	Scheme         *runtime.Scheme
-	Namespace      string
-	Handler        func(log.Logger, *config.Pools) SyncState
-	ValidateConfig config.Validate
-	ForceReload    func()
-	currentConfig  *config.Config
+	Logger              log.Logger
+	Scheme              *runtime.Scheme
+	Namespace           string
+	Handler             func(log.Logger, *config.Pools) SyncState
+	ValidateConfig      config.Validate
+	ForceReload         func()
+	currentConfig       *config.Config
+	LegacyConfigMapName string
 }
 
 func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -73,12 +76,31 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
+	var legacyConfig corev1.ConfigMap
+	key := client.ObjectKey{Name: r.LegacyConfigMapName, Namespace: r.Namespace}
+	if err := r.Get(ctx, key, &legacyConfig); err != nil && !apierrors.IsNotFound(err) {
+		level.Error(r.Logger).Log("controller", "ConfigReconciler", "message", "failed to get the frr configmap", "error", err)
+		return ctrl.Result{}, err
+	}
+
+	legacyCF, err := conversion.DecodeLegacyCM(legacyConfig)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	legacyResources, err := conversion.ResourcesFor(legacyCF)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	resources := config.ClusterResources{
 		Pools:              ipAddressPools.Items,
 		LegacyAddressPools: addressPools.Items,
 		Communities:        communities.Items,
 		Namespaces:         namespaces.Items,
 	}
+
+	resources = conversion.AddLegacyResources(&resources, &legacyResources)
 
 	level.Debug(r.Logger).Log("controller", "PoolReconciler", "metallb CRs", dumpClusterResources(&resources))
 
@@ -131,6 +153,7 @@ func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&metallbv1beta1.AddressPool{}, &handler.EnqueueRequestForObject{}).
 		Watches(&metallbv1beta1.Community{}, &handler.EnqueueRequestForObject{}).
 		Watches(&corev1.Namespace{}, &handler.EnqueueRequestForObject{}).
+		Watches(&corev1.ConfigMap{}, &handler.EnqueueRequestForObject{}).
 		WithEventFilter(p).
 		Complete(r)
 }

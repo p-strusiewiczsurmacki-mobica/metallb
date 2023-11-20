@@ -12,6 +12,7 @@ import (
 )
 
 type Validate func(ClusterResources) error
+type ValidateLegacy func(*Config) error
 
 func ValidationFor(bgpImpl string) Validate {
 	switch bgpImpl {

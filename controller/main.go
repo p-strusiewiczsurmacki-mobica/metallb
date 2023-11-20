@@ -132,6 +132,7 @@ func (c *controller) SetPools(l log.Logger, pools *config.Pools) controllers.Syn
 func main() {
 	var (
 		port                = flag.Int("port", 7472, "HTTP listening port for Prometheus metrics")
+		legacyConfigMap     = flag.String("config", "config", "Kubernetes ConfigMap containing MetalLB's configuration")
 		namespace           = flag.String("namespace", os.Getenv("METALLB_NAMESPACE"), "config / memberlist secret namespace")
 		mlSecret            = flag.String("ml-secret-name", os.Getenv("METALLB_ML_SECRET_NAME"), "name of the memberlist secret to create")
 		deployName          = flag.String("deployment", os.Getenv("METALLB_DEPLOYMENT"), "name of the MetalLB controller Deployment")
@@ -182,7 +183,8 @@ func main() {
 		Logger:          logger,
 		DisableEpSlices: *disableEpSlices,
 
-		Namespace: *namespace,
+		LegacyConfigMapName: *legacyConfigMap,
+		Namespace:           *namespace,
 		Listener: k8s.Listener{
 			ServiceChanged: c.SetBalancer,
 			PoolChanged:    c.SetPools,

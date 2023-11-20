@@ -100,6 +100,7 @@ type Client struct {
 // client/watcher.
 type Config struct {
 	ProcessName         string
+	LegacyConfigMapName string
 	NodeName            string
 	MetricsHost         string
 	MetricsPort         int
@@ -176,13 +177,14 @@ func New(cfg *Config) (*Client, error) {
 
 	if cfg.ConfigChanged != nil {
 		if err = (&controllers.ConfigReconciler{
-			Client:         mgr.GetClient(),
-			Logger:         cfg.Logger,
-			Scheme:         mgr.GetScheme(),
-			Namespace:      cfg.Namespace,
-			ValidateConfig: cfg.ValidateConfig,
-			Handler:        cfg.ConfigHandler,
-			ForceReload:    reload,
+			Client:              mgr.GetClient(),
+			Logger:              cfg.Logger,
+			Scheme:              mgr.GetScheme(),
+			Namespace:           cfg.Namespace,
+			ValidateConfig:      cfg.ValidateConfig,
+			Handler:             cfg.ConfigHandler,
+			ForceReload:         reload,
+			LegacyConfigMapName: cfg.LegacyConfigMapName,
 		}).SetupWithManager(mgr); err != nil {
 			level.Error(c.logger).Log("error", err, "unable to create controller", "config")
 			return nil, errors.Wrap(err, "failed to create config reconciler")
