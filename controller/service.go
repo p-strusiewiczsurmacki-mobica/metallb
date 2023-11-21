@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -115,6 +116,17 @@ func (c *controller) convergeBalancer(l log.Logger, key string, svc *v1.Service)
 		// requested a different pool than the one that is currently
 		// allocated.
 		desiredPool := svc.Annotations[AnnotationAddressPool]
+
+		// Convert annotation value to K8s compatible value.
+		if desiredPool != "" {
+			desiredPool, err = formatToK8S(desiredPool)
+			if err != nil {
+				level.Error(l).Log("event", "formatToK8S", "reason", err.Error(), "msg", "Failed to convert annotation value to K8S compatible value")
+				c.client.Errorf(svc, err.Error(), "Failed to convert annotation %s to K8S compatible value: %s", AnnotationAddressPool, err.Error())
+				return ErrConverge
+			}
+		}
+
 		if len(lbIPs) != 0 && desiredPool != "" && c.ips.Pool(key) != desiredPool {
 			level.Info(l).Log("event", "clearAssignment", "reason", "differentPoolRequested", "msg", "user requested a different pool than the one currently assigned")
 			c.clearServiceState(key, svc)
@@ -207,6 +219,14 @@ func (c *controller) allocateIPs(key string, svc *v1.Service) ([]net.IP, error) 
 
 	desiredPool := svc.Annotations[AnnotationAddressPool]
 
+	// Convert annotation value to K8s compatible value.
+	if desiredPool != "" {
+		desiredPool, err = formatToK8S(desiredPool)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// If the user asked for a specific IPs, try that.
 	if len(desiredLbIPs) > 0 {
 		if serviceIPFamily != desiredLbIPFamily {
@@ -286,4 +306,25 @@ func isEqualIPs(ipsA, ipsB []net.IP) bool {
 		return ipsB[i].String() < ipsB[j].String()
 	})
 	return reflect.DeepEqual(ipsA, ipsB)
+}
+
+func formatToK8S(name string) (string, error) {
+	var truncated string
+
+	if len(name) > 63 {
+		truncated = name[:63]
+	} else {
+		truncated = name
+	}
+
+	lowercase := strings.ToLower(truncated)
+	noUnderscore := strings.ReplaceAll(lowercase, "_", "-")
+
+	firstLetterRegex := regexp.MustCompile("[a-z]")
+	firstLetter := firstLetterRegex.FindStringIndex(noUnderscore)
+	if len(firstLetter) == 0 {
+		return "", fmt.Errorf("failed to make %s K8S compatible value", name)
+	}
+
+	return noUnderscore[firstLetter[0]:], nil
 }
